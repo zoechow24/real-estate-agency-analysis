@@ -75,7 +75,7 @@ agency_df <- do.call(rbind, lapply(agency, as.data.frame))
 db_name_fh <- "defaultdb"
 db_user_fh <- "avnadmin"
 db_host_fh <- "mysql-2b10ba46-khoury-45a7.aivencloud.com"
-db_pwd_fh <- "AVNS_kAVuJeIdLvvrp80R2GV"
+db_pwd_fh <- Sys.getenv("DB_PWD_FH")
 db_port_fh <- 11214
 
 db <-  dbConnect(RMySQL::MySQL(), user = db_user_fh, password = db_pwd_fh,
