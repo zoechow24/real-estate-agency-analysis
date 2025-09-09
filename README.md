@@ -1,5 +1,5 @@
 # Real Estate Agency Analysis
-**Course:** _DA5020 - Collecting, Storing, and Analyzing Data
+**Course:** _DA5020 - Collecting, Storing, and Analyzing Data_
 
 ## Overview
 This project simulates a real-world business analytics engagement for Arvind Choudry, a real estate owner in West Palm Beach, Florida. The objective was to analyze sales performance across his offices and agents, and to generate a polished, executive-ready HTML report with tables, charts, and statistical analysis.
