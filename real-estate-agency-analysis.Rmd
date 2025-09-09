@@ -1,0 +1,537 @@
+---
+title: "Agency Analysis"
+author: "Zoe Chow"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    theme: sandstone
+    highlight: tango
+    number_sections: true
+    df_print: paged
+subtitle: Sales Analysis and Forecasts
+---
+```{r LoadPackages, echo=F, message=F, warning=F}
+library(RMySQL) # for SQL handling
+library(dplyr) # for easy data frame handling
+library(ggplot2) # for plotting
+library(XML) # for XML handling 
+library(RCurl) # for XML handling 
+library(tidyr) # for easy data frame handling
+library(kableExtra) # for displaying tables
+library(lubridate) # handling date
+library(FNN) # for KNN
+library(class) # for kNN
+library(TTR) # for WMA
+```
+
+```{r LoadXML, echo=F, message=F, warning=F}
+URL <- "http://s3.us-east-2.amazonaws.com/artificium.us/datasets/agencies.xml"
+
+xmlContent <- getURL(URL)
+
+xmlDOM <- xmlParse(xmlContent, useInternalNodes = T)
+
+xmlRoot <- xmlRoot(xmlDOM)
+
+# Load XML into df for easy handling
+agency <- xpathApply(xmlRoot, "//Agency", function(node){
+  Name <- xmlGetAttr(node, "name")
+  City <- xmlGetAttr(node, "city")
+  
+  # iterate through the agents of each agency
+  agents <- xpathApply(node, ".//Agent", function(node){
+    Name <- xmlValue(node[["Name"]])
+    Email <- xmlValue(node[["Email"]])
+    Phone <- xmlValue(node[["Phone"]])
+    Commission <- xmlValue(node[["Commission"]])
+    HiringDate <- xmlValue(node[["HiringDate"]])
+    
+    list(
+      Name = Name,
+      Email = Email,
+      Phone = Phone,
+      Commission = Commission,
+      HiringDate = HiringDate
+    )
+    })
+  agents_df <- do.call(rbind, lapply(agents, as.data.frame))
+  
+  list(
+    AgencyName = Name,
+    City = City,
+    AgentName = agents_df$Name,
+    AgentEmail = agents_df$Email,
+    AgentPhone = agents_df$Phone,
+    AgentCommission = agents_df$Commission,
+    AgentHiringDate = agents_df$HiringDate
+  )
+})
+
+agency_df <- do.call(rbind, lapply(agency, as.data.frame))
+```
+
+```{r LoadSQL, echo=F}
+# Settings Aiven MySQL
+db_name_fh <- "defaultdb"
+db_user_fh <- "avnadmin"
+db_host_fh <- "mysql-2b10ba46-khoury-45a7.aivencloud.com"
+db_pwd_fh <- "AVNS_kAVuJeIdLvvrp80R2GV"
+db_port_fh <- 11214
+
+db <-  dbConnect(RMySQL::MySQL(), user = db_user_fh, password = db_pwd_fh,
+                 dbname = db_name_fh, host = db_host_fh, port = db_port_fh) 
+```
+
+
+## Introduction
+```{r Intro, echo=F}
+num_sales <- dbGetQuery(db, "SELECT COUNT(DISTINCT salesID) FROM sales")
+sorted_dates <- dbGetQuery(db, 
+                           "SELECT DISTINCT yearSold 
+                           FROM sales
+                           ORDER BY yearSold")
+sales_columns <- dbListFields(db, "sales")
+home_characteristics <- sales_columns[6:12]
+```
+
+This report analyzes the performance of sales agencies, their agents, and provides statistically derived forecasts for future sales. 
+The data was extracted from the database hosted on Aiven as well as agent-related data provided by marketing in the form of an XML file. 
+The database contains sales transactions for ``r num_sales[[1,1]]`` homes for the years ``r sorted_dates[[1,1]]`` through ``r sorted_dates[[nrow(sorted_dates),1]]``. 
+For each sale, we have records of ``r length(home_characteristics)`` distinct characteristics of the home, such as whether the home has a pool, what kind of air condition is featured in the home, and the amount of land.
+
+## Sales Analysis
+### Analysis of Sales by Agency
+```{r AgencyAnalysisKnit, echo=F}
+agent_count <- length(unique(agency_df$AgentName))
+agency_count <- length(unique(agency_df$AgencyName))
+```
+
+We employ ``r agent_count`` agents across ``r agency_count`` agencies. The list of agencies in their aggregate sales for the most recent three years (``r sorted_dates[[nrow(sorted_dates)-2,1]]`` to ``r sorted_dates[[nrow(sorted_dates),1]]``) are shown in the table below, in no particular order.
+
+```{r RecentSales, echo=F, warning=F, message=F}
+# For each salesAgent, add salesPrice for YearA, YearB, YearC
+totalSales_recentYear <- dbGetQuery(db,
+                        "SELECT s.salesAgent, 
+                                s.yearSold, 
+                                sum(salesPrice) AS sales
+                        FROM sales s
+                        JOIN (
+                          SELECT yearSold
+                          FROM sales
+                          GROUP BY yearSold
+                          ORDER BY yearSold DESC
+                          LIMIT 3
+                          ) 
+                        AS r ON s.yearSold = r.yearSold
+                        GROUP BY s.salesAgent, s.yearSold
+                        ORDER BY s.yearSold")
+```
+
+```{r AgencySales, echo=F, warning=F, message=F}
+agencySales <- agency_df %>%
+  
+  # join the sales info with the agency info
+  select(AgencyName, AgentName) %>%
+  left_join(totalSales_recentYear, by = c("AgentName" = "salesAgent")) %>%
+  
+  # combine sales for each agency based on year
+  group_by(AgencyName, yearSold) %>%
+  summarize(totalSales_recentYears = sum(sales, na.rm = TRUE)) %>%
+  
+  # summarize sales of each agency
+  mutate(
+    Avg = round(sum(totalSales_recentYears)/3,2), # do it manually bc mean() wouldn't find the avg of 3 years if an agency had no sales for a specific year
+    TotalSold = round(sum(totalSales_recentYears),2)
+  ) %>%
+  arrange(yearSold) %>%
+  
+  # turn yearSold column into 3 columns with each individual year
+  pivot_wider( 
+    names_from = yearSold,
+    values_from = totalSales_recentYears
+  ) %>%
+  
+  # put the summary columns at the end
+  relocate(Avg, TotalSold, .after = last_col()) %>%  
+  rename(Agency = AgencyName,
+         "Total Sold" = TotalSold) %>%
+  ungroup()
+
+# Find the total sales of each year and totalSold (exclude Avg)
+total_row <- agencySales %>%
+  select(-Avg) %>%  # Exclude the Avg column
+  summarize(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  mutate(Agency = "Total")  # Add "Total" to Agency column
+
+# Join the tables
+total_agencySales <- bind_rows(agencySales, total_row)
+
+  
+```
+
+```{r AgencySalesTable, echo=F, warning=F, message=F}
+# Edit df before creating table
+# replace total avg 
+agencySalesTable <- total_agencySales %>%
+  mutate(across(everything(), ~ifelse(is.na(.), "**", format(.x, big.mark = ","))))
+
+
+kbl(agencySalesTable, 
+    align = c("l", rep("c", ncol(agencySalesTable) - 1)), 
+    caption = "TABLE 1: Total of sale prices in thousands US$.") %>%
+  kable_styling() %>%
+  row_spec(0, bold = TRUE)
+```
+
+```{r AgencyMostSales, echo=F, warning=F, message=F}
+MostRecentYear <- as.character(sorted_dates[[nrow(sorted_dates),1]]) #most recent year
+
+RecentSales <- agencySales %>%
+  select(Agency, all_of(MostRecentYear)) %>%  
+  arrange(desc(.data[[MostRecentYear]])) 
+
+RecentTotalSales <- agencySales %>%
+  select(Agency, `Total Sold`) %>%
+  arrange(desc(`Total Sold`))
+
+```
+``r RecentSales[[1,1]]`` had the most sales for the most recent year, while ``r RecentTotalSales[[1,1]]`` has the most overall sales.
+
+### Analyis of Sales by Agent
+```{r AgentAnalysisKnit, echo=F, warning=F, message=F}
+SalesAgentsCount <- dbGetQuery(db,
+                          "SELECT COUNT(DISTINCT salesAgent) FROM sales")
+
+# create a table with the total rev of each agent
+TotalSalesRev <- dbGetQuery(db,
+                            "SELECT salesAgent, 
+                                    sum(salesPrice) AS totalSales
+                             FROM sales
+                             GROUP BY salesAgent
+                             ORDER BY totalSales DESC")
+
+# create a table with the most sales
+TotalUnitSales <- dbGetQuery(db, 
+                             "SELECT salesAgent,
+                                     COUNT(salesAgent) AS Total_Unit_Sales
+                              FROM sales
+                              GROUP BY salesAgent
+                              ORDER BY Total_Unit_Sales DESC")
+
+# get the total sales from sales (not just the most recent years)
+TotalSales <- dbGetQuery(db,
+                        "SELECT s.salesAgent, 
+                                s.yearSold, 
+                                sum(salesPrice) AS sales
+                        FROM sales s
+                        JOIN (
+                          SELECT yearSold
+                          FROM sales
+                          GROUP BY yearSold
+                          ORDER BY yearSold DESC
+                          ) 
+                        AS r ON s.yearSold = r.yearSold
+                        GROUP BY s.salesAgent, s.yearSold
+                        ORDER BY s.yearSold")
+
+# Join agency_df with sales for future manipulation
+joinedSales <- agency_df %>%
+  select(AgencyName, City, AgentName, AgentCommission, AgentHiringDate) %>%
+  mutate(AgentHiringDate = ymd(AgentHiringDate),
+         HiringYear = year(AgentHiringDate)) %>%
+  left_join(TotalSales, by = c("AgentName" = "salesAgent")) %>%
+  filter(HiringYear < yearSold) %>% # only keep data after the Agent was hired
+  
+  # make sure AgentCommission and sales is numeric for future manipulation
+  mutate(AgentCommission = as.numeric(AgentCommission),
+         sales = as.numeric(sales))
+
+# total overall commission
+totcommission_since_joined <- joinedSales %>%
+  select(AgencyName, City, AgentName, AgentCommission, sales) %>%
+  group_by(AgentName) %>%
+  summarize(TotalComm = sum(AgentCommission * sales, na.rm = TRUE),
+            Agency = first(AgencyName), # keep the first AgencyName for each group
+            City = first(City) # keep the first City for each group
+            ) %>%
+  arrange(desc(TotalComm))
+
+# total commission per year
+commission_per_Year <- joinedSales %>%
+  mutate(Commission = AgentCommission * sales) %>%
+  group_by(yearSold) %>%
+  summarize(TotalComm = sum(Commission, na.rm = TRUE), .groups = "drop",
+            AvgComm = (mean(Commission, na.rm = TRUE))) %>%
+  arrange(desc(yearSold))
+
+# function to calculate percent change
+per_change <- function(mostRecent, priorYear){
+  percent <- round((((mostRecent - priorYear) / (priorYear)) * 100), 2)
+  change <- ifelse(percent>0, "increase", "decrease")
+  return(list(percent = percent, change = change))
+}
+# percent change for the most recent year and the prior year
+MostRecentYearComm <- commission_per_Year[[1, "TotalComm"]]
+PriorYearComm <- commission_per_Year[[2, "TotalComm"]]
+percentChange <- per_change(MostRecentYearComm, PriorYearComm) 
+
+```
+
+We have ``r SalesAgentsCount[[1]]`` agents selling homes for years from ``r sorted_dates[[1,1]]`` to ``r sorted_dates[[nrow(sorted_dates),1]]``. ``r TotalSalesRev[[1,1]]`` is currently first on the leaderboard for having the most sales revenue of ``r paste0('$', format(TotalSalesRev[[1,2]], big.mark = ","))`` (the total of the sales prices), while ``r TotalUnitSales[[1,1]]`` has the most sales by unit (``r TotalUnitSales[[1,2]]``). Based on commission earned, ``r totcommission_since_joined[[1, "AgentName"]]`` of ``r totcommission_since_joined[[1, "Agency"]]`` in ``r totcommission_since_joined[[1, "City"]]`` has earned the most commission since they joined us. For the most recent year, a total of ``r paste0('$', format(MostRecentYearComm, big.mark = ","))`` was earned in commission by our sales agents which represents an ``r percentChange$change`` of ``r paste0(percentChange$percent, '%')`` over the prior year’s total of ``r paste0('$', format(PriorYearComm, big.mark = ","))``. The average sales commission in the most recent year was ``r paste0('$', format(commission_per_Year[[1, "AvgComm"]], big.mark = ","))``.
+
+The table below breaks down sales by sales agent for the two most recent years, ordered by sales total.
+```{r Table2_df, echo=F, warning=F, message=F}
+PriorYear <- sorted_dates[nrow(sorted_dates)-1, 1]
+
+table2_df <- joinedSales %>%
+  select(AgentName, yearSold, sales) %>%
+  group_by(AgentName, yearSold) %>%
+  summarize(YearlySales = sum(sales, na.rm = TRUE), .groups = "drop") %>%
+  filter(yearSold %in% c(MostRecentYear, PriorYear)) %>% #keep only most recent and prior year
+  
+  # add summary columns
+  group_by(AgentName) %>%
+  mutate(Avg = mean(YearlySales),
+         Total = sum(YearlySales)) %>%
+  
+  # change yearSold to columns
+  arrange(desc(yearSold)) %>%
+  pivot_wider(
+    names_from = yearSold,
+    values_from = YearlySales
+  ) %>%
+  relocate(Avg, Total, .after = last_col()) %>%
+  rename(Agent = AgentName,
+         "Total Sold" = Total)
+
+```
+
+
+```{r Table2, echo=F, warning=F, message=F}
+# Edit df before creating table
+# replace NA values and reformat to identify thousands and millions
+table2 <- table2_df %>%
+  mutate(across(everything(), ~ifelse(is.na(.), "**", format(.x, big.mark = ","))))
+
+kbl(table2, 
+    align = c("l", rep("c", ncol(table2) - 1)), 
+    caption = "TABLE 2: Sales by Agent (in Thousands US$).") %>%
+  kable_styling() %>%
+  row_spec(0, bold = TRUE)  
+```
+
+
+## Forecasting
+There is an increasing need for more accurate forecasts of revenue per agency as well as overall across agencies. The chart below shows the trend over the total monthly sales for the past year. We are showing an interpolated regression line.
+```{r db_MonthlySales, echo=F, warning=F, message=F}
+MonthlySales <- dbGetQuery(db, "SELECT yearSold, 
+                                       monthSold,
+                                       sum(salesPrice) as totalSales
+                                FROM sales 
+                                GROUP BY yearSold, monthSold
+                                ORDER BY yearSold, monthSold")
+```
+
+```{r fill_months, echo=F, warning=F, message=F}
+# create a df with all months for the data to fill in missing months
+full_grid <- expand.grid(
+  yearSold = min(MonthlySales$yearSold):max(MonthlySales$yearSold),
+  monthSold = 1:12
+)
+
+# join with the data 
+MonthlySales <- full_grid %>%
+  left_join(MonthlySales, by = c("yearSold", "monthSold"))
+
+```
+
+```{r kNN_NA, echo=F, warning=F, message=F}
+# separate known and unknown data
+known <- MonthlySales %>% filter(!is.na(totalSales))
+unknown <- MonthlySales %>% filter(is.na(totalSales))
+
+# scale data
+known_scaled <- scale(known[, 1:2]) # all but target
+unknown_scaled <- scale(unknown[, c("yearSold", "monthSold")],
+                        center = attr(known_scaled, "scaled:center"),
+                        scale = attr(known_scaled, "scaled:scale"))
+
+# kNN
+
+# Use knn.reg from FNN for regression
+set.seed(123)  # for reproducibility
+knn_result <- FNN::knn.reg(train = known_scaled,
+                           test = unknown_scaled,
+                           y = known$totalSales,
+                           k = 2) # kNN of 2 looked best when viewing plot
+
+# Add predicted sales to unknown rows
+unknown$totalSales <- knn_result$pred
+
+# Combine data 
+complete_monthlysales2023_2024 <- bind_rows(known, unknown) %>%
+  arrange(yearSold, monthSold) %>%
+  filter(yearSold >= PriorYear) %>%
+  mutate(dateSold = make_date(yearSold, monthSold, 1))
+
+
+sales2024 <- complete_monthlysales2023_2024 %>%
+  filter(yearSold == 2024) %>%
+  mutate(monthName = factor(month.abb[monthSold], levels = month.abb)) 
+```
+
+
+```{r ForecastPlot, echo=F, warning=F, message=F}
+ggplot(sales2024, aes(x = monthName, y = totalSales)) +
+  geom_col(fill = "gray90") +  # bar chart
+  geom_smooth(aes(group = 1), method = "loess", se = FALSE, color = "black", linewidth = 0.5) + # regression line using locally estimated scatterplot smoothing
+  scale_y_continuous(labels = function(x) paste0(x / 1000)) +
+  labs(x = NULL, 
+       y = "Sales (k$)", 
+       title = "Monthly Sales Trend for 2024") +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_text(family = "Times", face = "italic", color = "grey"),
+    plot.title = element_text(family = "Times New Roman", face = "bold", color = "grey")
+  )
+
+
+
+```
+
+
+```{r WMA, echo=F, warning=F, message=F}
+# Define the weights for the WMA (least --> most recent)
+weights <- c(0.1, 0.1, 0.1, 0.7)
+
+# Calculate the Weighted Moving Average of the next 2 month
+last4_months <- tail(complete_monthlysales2023_2024$totalSales, 4)
+WMA1stMonth <- sum(last4_months * weights)
+WMA2ndMonth <- sum(c(last4_months[-1], WMA1stMonth) * weights) #last 3 months and the forecasted month in the correct order
+```
+We used a weighted moving average of the prior four months sales with weights of 0.7 for the most recent months and equal weights for the remaining months to estimate total sales for next two months to be ``r paste0('$', formatC(WMA1stMonth, format = "f", big.mark = ",", digits = 2))`` and ``r paste0('$', formatC(WMA2ndMonth, format = "f", big.mark = ",", digits = 2))``.
+
+
+## Home Pricing Model
+To assist agents in setting a price that is market-oriented and fair, we have built a pricing equation that can estimate the likely sales price of a property based on its key characteristics. Pricing of a property should be the estimated price adjusted by a markup to account for sales commission and profit.
+
+```{r mulitple_linear_regression, echo=F, warning=F, message=F}
+pricing_df <- dbGetQuery(db, 
+                         "SELECT yearSold, salesPrice, hasUFFI, Gt45YearsOld, finishedBasement, landSizeSqMtrs, parkingSpots, hasAC, hasPool 
+                         FROM sales")
+
+# encode categorical to numerics
+pricing_df <- pricing_df %>%
+  mutate(
+    # encode categorical features
+    Gt45YearsOld = ifelse(Gt45YearsOld == "Yes", 1, 0),
+    finishedBasement = ifelse(finishedBasement == "Y", 1, 0),
+    
+    # hasAC has 4 categories. Perform rank encoding.
+    hasAC = case_when(
+      hasAC == "none"    ~ 0,
+      hasAC == "window"  ~ 1,
+      hasAC == "split"   ~ 3,
+      hasAC == "central" ~ 7 
+    )
+    
+  )
+
+# hasAC is the only column with missing values
+features <- c("salesPrice", "Gt45YearsOld", "finishedBasement", "landSizeSqMtrs", "parkingSpots", "hasPool") # features for kNN
+
+# separate known and unknown rows
+known <- pricing_df %>% filter(!is.na(hasAC))
+unknown <- pricing_df %>% filter(is.na(hasAC))
+
+# normalize features for kNN
+known_scaled <- scale(known[, features])
+unknown_scaled <- scale(unknown[, features],
+                        center = attr(known_scaled, "scaled:center"),
+                        scale = attr(known_scaled, "scaled:scale"))
+
+# kNN 
+set.seed(123)
+ac_predict <- knn(train = known_scaled,
+                  test = unknown_scaled,
+                  cl = known$hasAC,
+                  k = 5)
+# impute
+unknown$hasAC <- as.numeric(ac_predict)
+
+# combine the datasets
+pricing_df <- bind_rows(known, unknown) %>%
+  arrange(yearSold)
+
+# regression model
+model <- lm(salesPrice ~  yearSold + landSizeSqMtrs + parkingSpots + hasAC + hasPool, data = pricing_df)
+```
+
+
+The pricing model was developed using multiple linear regression and an estimate for the likely selling price of a home based on various characteristics can be calculated with the equation below:
+$$ estimate = -3.667e^7 + 1.825e^4(y) +1.108e^2(l) + 4.442e^4(s) + 1.546e^5(p) + 2.75e^5(c)$$
+where,
+
+* $y$ = year
+* $l$ = land size in square meters
+* $s$ = number of parking spots available
+* $p$ = presence of a pool (1 = present, 0 = absent)
+* $c$ = presence of central AC (1 = present, 0 = absent)
+
+```{r MLRpredic, echo=F, warning=F, message=F}
+new.data <- data.frame(
+  yearSold = year(Sys.Date()), # set the year as the year the test is being run
+  hasUFFI = 0,
+  Gt45YearsOld = 0,
+  finsishedBasement = 1,
+  landSizeSqMtrs = 518,
+  parkingSpots = 2,
+  hasAC = 7,
+  hasPool = 1
+)
+
+prediction <- predict(model, new.data, interval = "confidence")
+```
+
+As an aside, we have recently embedded the equation into the “Estimator” calculator on our website, so that our clients have an idea of a likely selling price based on comparables. To demonstrate the usefulness of the updated pricing model, we demonstrate the calculation of the estimated selling price of a 
+32-year-old four-bedroom single-family home on a 518$\text{m}^2$ lot, with an in-ground pool, no presence of UFFI, central AC, a two-car garage, and having a finished basement with a media room and a gym.
+For this home, the pricing model estimates a selling price between ``r paste0('$', formatC(prediction[2], format = "f", big.mark = ",", digits = 2))`` and ``r paste0('$', formatC(prediction[3], format = "f", big.mark = ",", digits = 2))`` (the 95% confidence interval).
+
+```{r hasUFFI, echo=F, warning=F, message=F}
+noUFFI <- mean(pricing_df$salesPrice[pricing_df$hasUFFI == 0], na.rm = TRUE)
+UFFI <- mean(pricing_df$salesPrice[pricing_df$hasUFFI == 1], na.rm = TRUE)
+
+salesDiff <- round(abs(noUFFI - UFFI) / UFFI * 100, 2)
+
+stats <- t.test(salesPrice ~ hasUFFI, data = pricing_df)
+sig <- ifelse(stats$p.value < 0.05, "does", "does not")
+```
+
+It is interesting to note that homes that have UFFI (Urea Formaldehyde Foam Insulation), a type of insulation that was popular in the 1970s and 1980s, but is now recognized as problematic due to formaldehyde off-gassing and other issues, have, on average, a ``r paste0(salesDiff, '%')`` lower sales price, however this difference in price ``r sig`` seem to be statistically significant (t = ``r formatC(stats$statistic, format = "f", digits = 3)``, p = ``r formatC(stats$p.value, format = "f", digits = 3)``) despite claims to the contrary by the Realtor Association.
+
+
+## Technical Details
+This section presents key technical details on how the forecast and the pricing formula were derived. We specifically excluded the month from the regression model, but left the year to account for appreciation in home values over the years. Any features that were not found to be statistically significant (i.e., had p < 0.05) were excluded from the model. Missing values in the data were imputed. The categorical variable “hasAC” was rank encoded with ranks of (none = 0, window = 1, split = 3, central = 7); any missing values for AC were replaced with a value obtained from a kNN classifier using the features (“SalesPrice”,“Gt45YrOld”,“finishedBasement”,“landSizeSqMtrs”,“parkingSpots”,“hasPool”). The kNN classifier was trained on the entire dataset excluding those with missing values for “hasAC”, of course. The data for kNN was prepared using z-score normalization for feature scaling and using binary encoding for any categorical features.
+
+## Summary
+This report provides a comprehensive analysis of real estate sales performance while offering forecasting insights and a pricing model to support agents in setting competitive listing prices. The inclusion of data imputation techniques and machine learning-based classification enhances the robustness of the analysis.
+
+## References
+[6.301 Woking with Databases in R](http://artificium.us/lessons/06.r/l-6-301-sqlite-from-r/l-6-301.html)<br>
+[6.323 Load Simple XML into Dataframe in R using xmlToDataFrame\(\)](http://artificium.us/lessons/06.r/l-6-323-load-xml-xmlToDataFrame/l-6-323.html)<br>
+[6.107 Data Manipulation with dpylr](http://artificium.us/lessons/06.r/l-6-107-dplyr/l-6-107.html#Filtering_Rows_with_filter()) <br>
+[6.113 Working wiht Date and Time Values in R](http://artificium.us/lessons/06.r/l-6-113-date-time-in-r/l-6-113.html)<br>
+[3.203 Detecting and Managing Outliers](http://artificium.us/lessons/03.ml/l-3-203-outliers/l-3-203.html#Handling_Outliers) <br>
+[60.101 Tabular Structures, Relational Data, and SQL](http://artificium.us/lessons/60.dbdesign/l-60-101-tabular-reldb-sql/l-60-101.html#Introduction)
+[3.303 Basic Time Series Forecasting](http://artificium.us/lessons/03.ml/l-3-303-time-series-forecasting-r/l-3-303.html#Lecture:_Trend_Line) <br>
+[3.409 kNN for Classification: A Primer](http://artificium.us/lessons/03.ml/l-3-409-knn-primer/l-3-409.html#Objectives) <br>
+[3.440 Multiple Regression: A Primer](http://artificium.us/lessons/03.ml/l-3-440-primer-regression/l-3-440.html#Introduction) <br>
+[Create Awesome HTML Table with knitr::kable and kableExtra](https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html#Overview) <br>
+[Introduction to ggplot2](https://ggplot2.tidyverse.org/articles/ggplot2.html#theme)
+
+
+```{r Disconnect, echo=F, warning=F, message=F, results='hide'}
+dbDisconnect(db)
+```
+

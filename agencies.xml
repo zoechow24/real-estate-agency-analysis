@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!DOCTYPE RealEstateAgencies [
+    <!ELEMENT RealEstateAgencies (Agency+)>
+    
+    <!ELEMENT Agency (Agent+)>
+    <!ATTLIST Agency name CDATA #REQUIRED>
+    <!ATTLIST Agency city CDATA #REQUIRED>
+    
+    <!ELEMENT Agent (Name, Email, Phone, Commission, HiringDate)>
+    
+    <!ELEMENT Name (#PCDATA)>
+    <!ELEMENT Email (#PCDATA)>
+    <!ELEMENT Phone (#PCDATA)>
+    <!ELEMENT Commission (#PCDATA)>
+    <!ELEMENT HiringDate (#PCDATA)>
+]>
+
+<RealEstateAgencies>
+    <Agency name="Sunshine Realty" city="West Palm Beach">
+        <Agent>
+            <Name>Jessica Rivera</Name>
+            <Email>jessica.rivera@sunshinerealty.com</Email>
+            <Phone>561-234-5678</Phone>
+            <Commission>3.5</Commission>
+            <HiringDate>2015-06-12</HiringDate>
+        </Agent>
+        <Agent>
+            <Name>Michael Thompson</Name>
+            <Email>michael.thompson@sunshinerealty.com</Email>
+            <Phone>561-345-6789</Phone>
+            <Commission>4.2</Commission>
+            <HiringDate>2018-09-23</HiringDate>
+        </Agent>
+    </Agency>
+    <Agency name="Oceanview Properties" city="Boca Raton">
+        <Agent>
+            <Name>Emily Carter</Name>
+            <Email>emily.carter@oceanview.com</Email>
+            <Phone>561-456-7890</Phone>
+            <Commission>3.8</Commission>
+            <HiringDate>2016-03-15</HiringDate>
+        </Agent>
+        <Agent>
+            <Name>David Lopez</Name>
+            <Email>david.lopez@oceanview.com</Email>
+            <Phone>561-567-8901</Phone>
+            <Commission>4.5</Commission>
+            <HiringDate>2019-07-10</HiringDate>
+        </Agent>
+        <Agent>
+            <Name>Sarah Collins</Name>
+            <Email>sarah.collins@oceanview.com</Email>
+            <Phone>561-678-9012</Phone>
+            <Commission>3.2</Commission>
+            <HiringDate>2014-12-05</HiringDate>
+        </Agent>
+    </Agency>
+    <Agency name="Palm Tree Realty" city="Delray Beach">
+        <Agent>
+            <Name>Brian Anderson</Name>
+            <Email>brian.anderson@palmtreerealty.com</Email>
+            <Phone>561-789-0123</Phone>
+            <Commission>2.9</Commission>
+            <HiringDate>2017-04-22</HiringDate>
+        </Agent>
+        <Agent>
+            <Name>Amanda Scott</Name>
+            <Email>amanda.scott@palmtreerealty.com</Email>
+            <Phone>561-890-1234</Phone>
+            <Commission>4.1</Commission>
+            <HiringDate>2020-08-14</HiringDate>
+        </Agent>
+    </Agency>
+    <Agency name="Golden Coast Realty" city="Boynton Beach">
+        <Agent>
+            <Name>Kevin Mitchell</Name>
+            <Email>kevin.mitchell@goldencoast.com</Email>
+            <Phone>561-901-2345</Phone>
+            <Commission>3.7</Commission>
+            <HiringDate>2015-11-30</HiringDate>
+        </Agent>
+    </Agency>
+</RealEstateAgencies>
+
