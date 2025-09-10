@@ -15,6 +15,21 @@ The project integrates data from two sources:
 * `real-estate-agency-report.html` - final rendered report
 * `agencies.xml` - XML file containing agency data that was parsed directly from its URL for the report
 
+## Dependencies: 
+This project uses the following packages:
+* RMySQL
+* dplyr
+* ggplot2
+* XML
+* RCurl
+* ggplot2
+* tidyr
+* kableExtra
+* lubridate
+* FNN
+* class
+* TTR
+
 ## Workflow
 1. Connect to MySQL database.
 2. Parse `agencies.xml` from its URL and load into R.
