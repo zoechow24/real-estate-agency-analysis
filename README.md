@@ -43,7 +43,7 @@ This project uses the following packages:
 5. Generate an HTML report.
 
 ## Results
-The [final report](https://zoechow24.github.io/real-estate-agency-analysis/real-estate-agency-analysis.Rmd) highlights:
+The [final report](https://zoechow24.github.io/real-estate-agency-analysis/real-estate-agency-report.html) highlights:
 * Office-level and agent-level sales performance
 * Aggregated statistics and rankings
 * Visualization of revenue trends
